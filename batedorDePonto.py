@@ -12,6 +12,7 @@ import csv
 point_date_format = '%Y-%m-%d %H:%M'
 point_key_format = '%Y-%m-%d'
 csv_format = point_key_format
+days_off_format = '%m/%d/%Y'
 time_format = '%H:%M'
 arg_date_format = '%m/%Y'
 preferences_suffix = '###PREFERENCES_END'
@@ -27,13 +28,13 @@ def set_last_day_of_month(date):
 
 
 def is_point_valid(point):
-   if point == '':
-       return False
-   try:
-       datetime.datetime.strptime(point, point_date_format)
-       return True
-   except:
-       return False
+    if point == '':
+        return False
+    try:
+        datetime.datetime.strptime(point, point_date_format)
+        return True
+    except:
+        return False
 
 
 def point_line_to_date(line):
@@ -46,6 +47,29 @@ def get_point_lines(lines):
        line.split(';')[0]
        for line in after_preferences
     ]
+
+
+def add_date_to_days_off(date_string, days_off):
+    to_string = lambda x: x.strftime('%Y-%m-%d')
+    date = datetime.datetime.strptime(date_string, days_off_format)
+    days_off.add(to_string(date))
+
+    weekday = date.weekday()
+    if weekday == 2: # tuesday
+        days_off.add(to_string(date - datetime.timedelta(-1)))
+    if weekday == 4: # thursday
+        days_off.add(to_string(date - datetime.timedelta(1)))
+
+
+# 01/01/2001,segunda-feira,Confraternização Universal
+def read_days_off(filename):
+    with open(filename) as fin:
+        date_strings = [line.strip().split(',')[0] for line in fin]
+        days_off = set()
+        for date_string in date_strings:
+            add_date_to_days_off(date_string, days_off)
+
+        return days_off
 
 
 def read_series(filename):
@@ -73,7 +97,7 @@ def is_business_day(date):
 def get_min_max_dates(dates):
     min_date = pandas.Timestamp.max
     max_date = pandas.Timestamp.min
-    
+
     for date in dates:
         if date < min_date:
             min_date = date
@@ -116,19 +140,21 @@ def group_points(series, start_date, end_date):
     inside_range = filter_points_inside_range(series, start_date, end_date)
     min_date, max_date = get_min_max_dates(inside_range)
     partial_grouped_points = get_empty_grouped_points(min_date, max_date)
-    
+
     for point in series:
         update_day_stats(partial_grouped_points[point_to_key(point)], point)
 
     return partial_grouped_points
 
 
-def point_to_row(p):
+def point_to_row(p, days_off):
     point_date = datetime.datetime.strftime(p['original_date'], csv_format)
     weekday = p['original_date'].weekday()
 
     if 'first_point' not in p or p['working']:
-        if weekday >= 5:
+        if point_date in days_off and weekday < 5:
+            return [point_date] + (['FERIADO'] * 4)
+        elif weekday >= 5:
             day_name = 'SÁBADO' if weekday == 5 else 'DOMINGO'
             return [point_date] + ([day_name] * 4)
         else:
@@ -145,11 +171,10 @@ def point_to_row(p):
     ]
 
 
-def generate_csv(grouped_points, output_filename):
+def generate_csv(grouped_points, days_off, output_filename):
     with open(output_filename, 'w') as csvfile:
         writer = csv.writer(csvfile)
-        rows = list(map(point_to_row, grouped_points.values()))
-        print(rows)
+        rows = list(map(lambda x: point_to_row(x, days_off), grouped_points.values()))
         for row in rows:
             writer.writerow(row)
 
@@ -170,6 +195,12 @@ parser.add_argument(
     help='Caminho do CSV a ser criado'
 )
 parser.add_argument(
+    '-i', '--holidays',
+    dest='holidays_filename',
+    default='feriadosNacionais.csv',
+    help='Caminho para o CSV com feriados nacionais'
+)
+parser.add_argument(
     '-s', '--start',
     dest='start_date',
     type=arg_to_date,
@@ -186,6 +217,7 @@ parser.add_argument(
 
 
 args = parser.parse_args()
+days_off = read_days_off(args.holidays_filename)
 series = read_series(args.filename)
 grouped_points = group_points(series, args.start_date, args.end_date)
 
@@ -197,4 +229,4 @@ if len(still_open_days) > 0:
     print('\nATENÇÃO: O CSV será criado ignorando os dias sem ponto de fechamento.\n')
 
 
-generate_csv(grouped_points, args.output_filename)
+generate_csv(grouped_points, days_off, args.output_filename)
