@@ -1,0 +1,1 @@
+# Batedor de ponto
